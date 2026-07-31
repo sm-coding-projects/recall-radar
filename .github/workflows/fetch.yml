@@ -1,0 +1,65 @@
+name: Daily recall fetch
+
+on:
+  schedule:
+    # 06:00 UTC daily. GitHub queues cron runs on shared capacity, so the
+    # actual start can drift by several minutes -- fine for a daily job.
+    - cron: "0 6 * * *"
+  workflow_dispatch:
+    inputs:
+      backfill:
+        description: "Pull all available history instead of the recent window"
+        type: boolean
+        default: false
+      agency:
+        description: "Limit to one agency (blank = all)"
+        type: choice
+        default: ""
+        options: ["", "FDA", "CPSC", "FSIS", "NHTSA"]
+
+concurrency:
+  group: fetch
+  cancel-in-progress: false
+
+permissions:
+  contents: write   # required to push the heartbeat commit
+
+jobs:
+  fetch:
+    runs-on: ubuntu-latest
+    # A backfill downloads and parses far more than the daily window.
+    timeout-minutes: ${{ inputs.backfill && 60 || 20 }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Fetch recalls
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+        run: |
+          python -m fetcher.run \
+            ${{ inputs.backfill && '--backfill' || '' }} \
+            ${{ inputs.agency && format('--agency {0}', inputs.agency) || '' }}
+
+      - name: Update heartbeat
+        # GitHub disables scheduled workflows in repos with no activity for 60
+        # days. A committed timestamp each run keeps the schedule alive.
+        if: github.event_name == 'schedule'
+        run: |
+          date -u +"%Y-%m-%dT%H:%M:%SZ" > heartbeat.txt
+          git config user.name  "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add heartbeat.txt
+          git diff --staged --quiet || git commit -m "chore: fetch heartbeat [skip ci]"
+          # Rebase before pushing: a run that overlaps a manual push would
+          # otherwise fail on a non-fast-forward.
+          git pull --rebase --autostash origin ${{ github.ref_name }}
+          git push origin HEAD:${{ github.ref_name }}
