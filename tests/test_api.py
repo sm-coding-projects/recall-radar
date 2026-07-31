@@ -250,6 +250,86 @@ class TestProxySecret:
 # Error handling
 # --------------------------------------------------------------------------
 
+class TestOpenAPI:
+    """The spec is the product surface on RapidAPI, so it is tested like one."""
+
+    @pytest.fixture
+    def spec(self):
+        app.openapi_schema = None  # rebuild rather than reuse a cached schema
+        return app.openapi()
+
+    def test_declares_the_production_server(self, spec):
+        assert spec["servers"] == [
+            {"url": "https://recall-radar.onrender.com", "description": "Production"}
+        ]
+
+    def test_every_route_sets_an_explicit_summary(self):
+        """Checked on the route objects, not the spec.
+
+        FastAPI synthesizes a summary from the function name ("List Recalls")
+        when none is given, so asserting the spec has *a* summary passes even
+        when nothing was written. `route.summary` is None unless set.
+        """
+        from fastapi.routing import APIRoute
+
+        for route in app.routes:
+            if not isinstance(route, APIRoute) or route.path in {
+                "/openapi.json", "/docs", "/redoc", "/docs/oauth2-redirect",
+            }:
+                continue
+            assert route.summary, f"{route.path} has no explicit summary="
+            # A hand-written summary should not just be the function name.
+            assert route.summary.lower() != route.name.replace("_", " ").lower(), (
+                f"{route.path} summary merely restates the function name"
+            )
+
+    def test_every_route_has_a_meaningful_description(self, spec):
+        for path, operations in spec["paths"].items():
+            for method, op in operations.items():
+                assert len((op.get("description") or "").strip()) > 50, (
+                    f"{method.upper()} {path} has no meaningful description"
+                )
+
+    def test_every_route_has_a_200_example(self, spec):
+        for path, operations in spec["paths"].items():
+            for method, op in operations.items():
+                example = (
+                    op["responses"]["200"].get("content", {})
+                    .get("application/json", {}).get("example")
+                )
+                assert example is not None, f"{method.upper()} {path} has no 200 example"
+
+    def test_authenticated_routes_document_401(self, spec):
+        for path, operations in spec["paths"].items():
+            if path == "/health":
+                continue  # deliberately public
+            for method, op in operations.items():
+                assert "401" in op["responses"], f"{method.upper()} {path} does not document 401"
+
+    def test_error_examples_use_the_error_envelope(self, spec):
+        for path, operations in spec["paths"].items():
+            for op in operations.values():
+                for status, response in op["responses"].items():
+                    if not status.startswith(("4", "5")):
+                        continue
+                    example = response.get("content", {}).get("application/json", {}).get("example")
+                    if example is None:
+                        continue
+                    assert set(example) == {"error"}, f"{path} {status} is not an error envelope"
+                    assert {"code", "message"} <= set(example["error"])
+
+    def test_documented_route_set_is_exactly_the_five_public_endpoints(self, spec):
+        assert set(spec["paths"]) == {
+            "/health", "/recalls", "/recalls/latest", "/recalls/search",
+            "/recalls/{agency}/{source_id}",
+        }
+
+    def test_spec_is_served(self, client):
+        response = client.get("/openapi.json")
+        assert response.status_code == 200
+        assert response.json()["info"]["title"] == "recall-radar"
+
+
 class TestErrors:
     def test_unhandled_errors_do_not_leak_internals(self, client, monkeypatch):
         def boom(*args, **kwargs):
