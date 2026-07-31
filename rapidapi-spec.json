@@ -76,7 +76,8 @@
               ],
               "title": "Agency"
             },
-            "description": "Filter by agency, case-insensitive. Blank means no filter."
+            "description": "Filter by agency, case-insensitive. Blank means no filter.",
+            "example": "CPSC"
           },
           {
             "name": "category",
@@ -97,7 +98,8 @@
               ],
               "title": "Category"
             },
-            "description": "Case-insensitive substring match on category. Blank means no filter."
+            "description": "Case-insensitive substring match on category. Blank means no filter.",
+            "example": "Food"
           },
           {
             "name": "since",
@@ -119,7 +121,8 @@
               ],
               "title": "Since"
             },
-            "description": "Only recalls on or after this date. Blank means no lower bound."
+            "description": "Only recalls on or after this date. Blank means no lower bound.",
+            "example": "2026-07-01"
           },
           {
             "name": "until",
@@ -141,7 +144,8 @@
               ],
               "title": "Until"
             },
-            "description": "Only recalls on or before this date. Blank means no upper bound."
+            "description": "Only recalls on or before this date. Blank means no upper bound.",
+            "example": "2026-07-31"
           },
           {
             "name": "page",
@@ -163,7 +167,8 @@
               ],
               "title": "Page"
             },
-            "description": "1-based page number. Blank defaults to 1."
+            "description": "1-based page number. Blank defaults to 1.",
+            "example": 1
           },
           {
             "name": "per_page",
@@ -186,7 +191,8 @@
               ],
               "title": "Per Page"
             },
-            "description": "Results per page, max 100. Blank defaults to 25."
+            "description": "Results per page, max 100. Blank defaults to 25.",
+            "example": 25
           }
         ],
         "responses": {
@@ -422,7 +428,8 @@
               ],
               "title": "Q"
             },
-            "description": "Search query. Required, minimum 2 characters."
+            "description": "Search query. Required, minimum 2 characters.",
+            "example": "listeria"
           },
           {
             "name": "agency",
@@ -443,7 +450,8 @@
               ],
               "title": "Agency"
             },
-            "description": "Optionally restrict to one agency. Blank means all agencies."
+            "description": "Optionally restrict to one agency. Blank means all agencies.",
+            "example": "FDA"
           },
           {
             "name": "page",
@@ -465,7 +473,8 @@
               ],
               "title": "Page"
             },
-            "description": "1-based page number. Blank defaults to 1."
+            "description": "1-based page number. Blank defaults to 1.",
+            "example": 1
           },
           {
             "name": "per_page",
@@ -488,7 +497,8 @@
               ],
               "title": "Per Page"
             },
-            "description": "Results per page, max 100. Blank defaults to 25."
+            "description": "Results per page, max 100. Blank defaults to 25.",
+            "example": 25
           }
         ],
         "responses": {
@@ -600,7 +610,8 @@
               ],
               "title": "Agency"
             },
-            "description": "Agency code, case-insensitive."
+            "description": "Agency code, case-insensitive.",
+            "example": "NHTSA"
           },
           {
             "name": "source_id",
@@ -614,7 +625,8 @@
               ],
               "title": "Source Id"
             },
-            "description": "The agency's own recall identifier, exactly as it appears in `source_id`."
+            "description": "The agency's own recall identifier, exactly as it appears in `source_id`.",
+            "example": "26V481000"
           }
         ],
         "responses": {
