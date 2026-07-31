@@ -6,6 +6,7 @@ suite hermetic and fast; the real SQL is exercised against Neon in Step 9.
 
 from __future__ import annotations
 
+import json
 from datetime import date, datetime, timezone
 
 import pytest
@@ -250,6 +251,92 @@ class TestProxySecret:
 # Error handling
 # --------------------------------------------------------------------------
 
+class TestBlankQueryParams:
+    """API gateways send unset optional params as empty strings.
+
+    RapidAPI's playground issues `?agency=&category=&since=&until=&page=&per_page=`
+    for a call with no filters. Before this was handled, every one of those
+    requests 422'd on the date and int params, making the playground -- the
+    first thing a prospective buyer touches -- look broken.
+
+    A blank value must mean "not supplied". A wrong value must still be an error.
+    """
+
+    RAPIDAPI_STYLE = "/recalls?agency=&category=&since=&until=&page=&per_page="
+
+    def test_all_params_blank_succeeds(self, client):
+        assert client.get(self.RAPIDAPI_STYLE).status_code == 200
+
+    def test_all_params_blank_matches_no_params_at_all(self, client):
+        blank = client.get(self.RAPIDAPI_STYLE).json()
+        bare = client.get("/recalls").json()
+        assert blank["pagination"] == bare["pagination"]
+        assert blank["meta"] == bare["meta"]
+
+    @pytest.mark.parametrize("param", ["agency", "category", "since", "until", "page", "per_page"])
+    def test_each_param_individually_blank(self, client, param):
+        assert client.get(f"/recalls?{param}=").status_code == 200
+
+    def test_blank_filters_are_not_applied(self, client, stub_db):
+        client.get(self.RAPIDAPI_STYLE)
+        sql, params = stub_db[-1]
+        for fragment in ("agency = ", "category ILIKE", "recall_date >=", "recall_date <="):
+            assert fragment not in sql, f"blank param produced a {fragment!r} filter"
+
+    def test_blank_filters_absent_from_meta(self, client):
+        assert client.get(self.RAPIDAPI_STYLE).json()["meta"]["filters"] == {}
+
+    def test_blank_pagination_falls_back_to_defaults(self, client):
+        page = client.get("/recalls?page=&per_page=").json()["pagination"]
+        assert page["page"] == 1
+        assert page["per_page"] == 25
+
+    def test_whitespace_only_is_treated_as_blank(self, client):
+        assert client.get("/recalls?since=%20&until=%20&page=%20").status_code == 200
+
+    def test_search_accepts_blank_optional_params(self, client):
+        assert client.get("/recalls/search?q=listeria&agency=&page=&per_page=").status_code == 200
+
+    # ---- blanks are forgiven; wrong values are not -------------------------
+
+    @pytest.mark.parametrize(
+        "url",
+        [
+            "/recalls?since=banana",
+            "/recalls?until=2026-13-45",
+            "/recalls?page=abc",
+            "/recalls?page=0",
+            "/recalls?page=-1",
+            "/recalls?per_page=0",
+            "/recalls?per_page=101",
+            "/recalls/search?q=listeria&per_page=101",
+        ],
+    )
+    def test_genuinely_invalid_values_still_422(self, client, url):
+        response = client.get(url)
+        assert response.status_code == 422, url
+        assert response.json()["error"]["code"] == "invalid_parameters"
+
+    def test_invalid_value_names_the_offending_field(self, client):
+        detail = client.get("/recalls?per_page=101").json()["error"]["detail"]
+        assert detail[0]["field"] == "per_page"
+        assert "100" in detail[0]["reason"]
+
+    def test_blank_required_query_is_still_rejected(self, client):
+        # q is required and meaningless when empty -- unlike the optional filters.
+        assert client.get("/recalls/search?q=").status_code == 422
+
+    def test_bounds_are_enforced_without_500ing(self, client):
+        """Regression guard.
+
+        Declaring ge/le on the outer `int | None` made Pydantic try to apply
+        the constraint to None, raising TypeError -> HTTP 500. The bound has to
+        live on the int member of the union.
+        """
+        for url in ("/recalls?page=", "/recalls?per_page=", "/recalls?page=0"):
+            assert client.get(url).status_code != 500, url
+
+
 class TestOpenAPI:
     """The spec is the product surface on RapidAPI, so it is tested like one."""
 
@@ -328,6 +415,48 @@ class TestOpenAPI:
         response = client.get("/openapi.json")
         assert response.status_code == 200
         assert response.json()["info"]["title"] == "recall-radar"
+
+    def test_operation_ids_are_clean_camel_case(self, spec):
+        """RapidAPI shows operationId as the endpoint name.
+
+        FastAPI's default is the mangled `list_recalls_recalls_get`, which
+        looks unprofessional on a paid listing.
+        """
+        found = {
+            op["operationId"]
+            for operations in spec["paths"].values()
+            for op in operations.values()
+        }
+        assert found == {
+            "getHealth", "listRecalls", "getLatestRecalls",
+            "searchRecalls", "getRecallById",
+        }
+        for operation_id in found:
+            assert "_" not in operation_id, f"{operation_id} is not camelCase"
+            assert not operation_id.endswith("_get")
+
+    def test_optional_query_params_are_documented_as_not_required(self, spec):
+        # Scoped to `in: query` -- `agency` is also a path param on the detail
+        # route, where being required is correct.
+        optional = {"agency", "category", "since", "until", "page", "per_page"}
+        checked = 0
+        for path, operations in spec["paths"].items():
+            for op in operations.values():
+                for param in op.get("parameters", []):
+                    if param["in"] == "query" and param["name"] in optional:
+                        assert param["required"] is False, f"{path}:{param['name']}"
+                        checked += 1
+        assert checked >= 9, f"expected to check ~10 optional query params, saw {checked}"
+
+    def test_pagination_bounds_survive_in_the_schema(self, spec):
+        """The ge/le bounds moved inside the union; they must still be published."""
+        params = {
+            p["name"]: p
+            for p in spec["paths"]["/recalls"]["get"]["parameters"]
+        }
+        per_page = json.dumps(params["per_page"]["schema"])
+        assert "100" in per_page and "maximum" in per_page
+        assert "minimum" in json.dumps(params["page"]["schema"])
 
 
 class TestErrors:

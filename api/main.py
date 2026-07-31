@@ -5,13 +5,17 @@ import os
 import secrets
 from contextlib import asynccontextmanager
 from datetime import date
-from typing import Any
+from typing import Annotated, Any
 
 from fastapi import FastAPI, HTTPException, Path, Query, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 
 from . import db, openapi_examples as ex
+from .params import (
+    DEFAULT_PAGE, DEFAULT_PER_PAGE, MAX_PER_PAGE,
+    OptionalDate, OptionalText, PageNumber, PerPageNumber,
+)
 from .schemas import (
     ErrorDetail, ErrorResponse, Health, ItemResponse, ListResponse,
     Pagination, Recall,
@@ -20,8 +24,6 @@ from .schemas import (
 log = logging.getLogger("api")
 
 VERSION = "0.1.0"
-MAX_PER_PAGE = 100
-DEFAULT_PER_PAGE = 25
 LATEST_LIMIT = 50
 
 PROXY_SECRET_HEADER = "X-RapidAPI-Proxy-Secret"
@@ -163,6 +165,7 @@ async def unhandled_exception_handler(request: Request, exc: Exception) -> JSONR
     response_model=Health,
     tags=["meta"],
     summary="Service health",
+    operation_id="getHealth",
     response_description="Service status and the total number of recalls held.",
     responses={200: ex.json_example(ex.HEALTH_OK, "Service and database are both healthy.")},
 )
@@ -192,6 +195,7 @@ def health() -> Health:
     response_model=ListResponse[Recall],
     tags=["recalls"],
     summary="List recalls with filters and pagination",
+    operation_id="listRecalls",
     response_description="A page of recalls, newest first, plus pagination metadata.",
     responses={
         200: ex.json_example(ex.LIST_RECALLS, "A page of matching recalls."),
@@ -201,20 +205,29 @@ def health() -> Health:
     },
 )
 def list_recalls(
-    agency: str | None = Query(
-        None, description="Filter by agency, case-insensitive.", examples=["CPSC"],
-    ),
-    category: str | None = Query(
-        None, description="Case-insensitive substring match on category.", examples=["Food"],
-    ),
-    since: date | None = Query(
-        None, description="Only recalls on or after this date.", examples=["2026-07-01"],
-    ),
-    until: date | None = Query(
-        None, description="Only recalls on or before this date.", examples=["2026-07-31"],
-    ),
-    page: int = Query(1, ge=1, description="1-based page number."),
-    per_page: int = Query(DEFAULT_PER_PAGE, ge=1, le=MAX_PER_PAGE, description="Results per page (max 100)."),
+    agency: Annotated[OptionalText, Query(
+        description="Filter by agency, case-insensitive. Blank means no filter.",
+        examples=["CPSC"],
+    )] = None,
+    category: Annotated[OptionalText, Query(
+        description="Case-insensitive substring match on category. Blank means no filter.",
+        examples=["Food"],
+    )] = None,
+    since: Annotated[OptionalDate, Query(
+        description="Only recalls on or after this date. Blank means no lower bound.",
+        examples=["2026-07-01"],
+    )] = None,
+    until: Annotated[OptionalDate, Query(
+        description="Only recalls on or before this date. Blank means no upper bound.",
+        examples=["2026-07-31"],
+    )] = None,
+    page: Annotated[PageNumber, Query(
+        description="1-based page number. Blank defaults to 1.", examples=[1],
+    )] = None,
+    per_page: Annotated[PerPageNumber, Query(
+        description=f"Results per page, max {MAX_PER_PAGE}. Blank defaults to {DEFAULT_PER_PAGE}.",
+        examples=[25],
+    )] = None,
 ) -> ListResponse[Recall]:
     """Browse recalls across all agencies, newest first.
 
@@ -232,7 +245,13 @@ def list_recalls(
 
     Passing a `since` later than `until` returns `400` rather than an empty
     page, so a swapped-argument bug surfaces instead of looking like no data.
+
+    Every parameter may be sent blank (`?agency=&since=`) — a blank value means
+    "not supplied", which is what API gateways emit for unset optional fields.
     """
+    page = page or DEFAULT_PAGE
+    per_page = per_page or DEFAULT_PER_PAGE
+
     if since and until and since > until:
         raise HTTPException(400, "`since` must not be after `until`.")
 
@@ -261,6 +280,7 @@ def list_recalls(
     response_model=ListResponse[Recall],
     tags=["recalls"],
     summary="The 50 most recent recalls",
+    operation_id="getLatestRecalls",
     response_description="The 50 newest recalls across all agencies.",
     responses={
         200: ex.json_example(ex.LATEST_RECALLS, "The 50 newest recalls."),
@@ -294,6 +314,7 @@ def latest_recalls() -> ListResponse[Recall]:
     response_model=ListResponse[Recall],
     tags=["recalls"],
     summary="Full-text search over recalls",
+    operation_id="searchRecalls",
     response_description="Matching recalls ranked by relevance.",
     responses={
         200: ex.json_example(ex.SEARCH_RECALLS, "Recalls matching the query, most relevant first."),
@@ -302,12 +323,22 @@ def latest_recalls() -> ListResponse[Recall]:
     },
 )
 def search_recalls(
-    q: str = Query(
-        ..., min_length=2, description="Search query (min 2 characters).", examples=["listeria"],
-    ),
-    agency: str | None = Query(None, description="Optionally restrict to one agency."),
-    page: int = Query(1, ge=1, description="1-based page number."),
-    per_page: int = Query(DEFAULT_PER_PAGE, ge=1, le=MAX_PER_PAGE, description="Results per page (max 100)."),
+    q: Annotated[str, Query(
+        min_length=2,
+        description="Search query. Required, minimum 2 characters.",
+        examples=["listeria"],
+    )],
+    agency: Annotated[OptionalText, Query(
+        description="Optionally restrict to one agency. Blank means all agencies.",
+        examples=["FDA"],
+    )] = None,
+    page: Annotated[PageNumber, Query(
+        description="1-based page number. Blank defaults to 1.", examples=[1],
+    )] = None,
+    per_page: Annotated[PerPageNumber, Query(
+        description=f"Results per page, max {MAX_PER_PAGE}. Blank defaults to {DEFAULT_PER_PAGE}.",
+        examples=[25],
+    )] = None,
 ) -> ListResponse[Recall]:
     """Postgres full-text search across product name, brand, and hazard text.
 
@@ -328,7 +359,13 @@ def search_recalls(
 
     Searching is the right tool for "is this product recalled?"; use
     `/recalls` when you want to browse or export a date range.
+
+    `agency`, `page`, and `per_page` may be sent blank, which means "not
+    supplied". `q` is required: an empty query returns `422`.
     """
+    page = page or DEFAULT_PAGE
+    per_page = per_page or DEFAULT_PER_PAGE
+
     params: dict[str, Any] = {"q": q}
     where = ["search_tsv @@ websearch_to_tsquery('english', %(q)s)"]
     if agency:
@@ -361,6 +398,7 @@ def search_recalls(
     response_model=ItemResponse[Recall],
     tags=["recalls"],
     summary="Get one recall by agency and source ID",
+    operation_id="getRecallById",
     response_description="The requested recall.",
     responses={
         200: ex.json_example(ex.SINGLE_RECALL, "The requested recall."),
