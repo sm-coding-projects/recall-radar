@@ -15,8 +15,8 @@ another date-format parser.
 The archive currently holds **111,733 recalls**. Coverage runs deep as well as
 wide: CPSC consumer-product recalls go back to **June 1973**, FDA enforcement
 reports to 2005 (sparse before 2008, dense from 2012), and NHTSA safety
-campaigns to 2010. Recent years are dense and complete — roughly **6,000 to 7,000 recalls per year** since 2020,
-spanning **16,600 distinct brands** and **1,380 product categories**. That
+campaigns to 2010. Recent years are dense and complete — roughly **6,000 to
+7,000 recalls per year** since 2020, spanning **16,600 distinct brands** and **1,380 product categories**. That
 depth makes the API useful for more than alerting: you can chart a supplier's
 recall history over a decade, quantify hazard patterns in a product class, or
 backfill a compliance database in a single paginated pull.
