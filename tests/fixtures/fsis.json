@@ -1,0 +1,48 @@
+[
+ {
+  "field_recall_number": "011-2026",
+  "field_title": "Acme Foods Recalls Chicken Products",
+  "field_recall_url": "https://www.fsis.usda.gov/recalls-alerts/acme-011-2026",
+  "field_recall_date": "2026-07-15",
+  "field_recall_classification": "Class I",
+  "field_recall_reason": [
+   "Product Contamination"
+  ],
+  "field_summary": "<p>Acme Foods is recalling approximately <strong>10,000 pounds</strong> of chicken.</p>",
+  "field_product_items": [
+   "<p>12-oz packages of ACME Chicken Strips</p>"
+  ],
+  "field_establishment": [
+   "Acme Foods, Inc."
+  ],
+  "field_states": [
+   "CA",
+   "NV"
+  ],
+  "field_active_notice": "True",
+  "field_year_id": "2026"
+ },
+ {
+  "field_recall_number": "PHA-07152026-01",
+  "field_title": "Public Health Alert for Beef",
+  "field_recall_url": "https://www.fsis.usda.gov/recalls-alerts/pha-07152026-01",
+  "field_recall_date": "2026-07-20",
+  "field_recall_classification": "Public Health Alert",
+  "field_recall_reason": [],
+  "field_summary": "<p>E. coli O157:H7 concern.</p>",
+  "field_product_items": [],
+  "field_establishment": [
+   "Beef Co"
+  ],
+  "field_states": [
+   "TX"
+  ],
+  "field_active_notice": "True",
+  "field_year_id": "2026"
+ },
+ {
+  "field_recall_number": "",
+  "field_title": "Unnumbered record that must be skipped",
+  "field_recall_date": "2026-07-01"
+ }
+]
