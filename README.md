@@ -7,12 +7,21 @@ four different shapes, with four different quirks. `recall-radar` fetches all of
 them daily, normalizes them into a single schema, and serves them as clean,
 searchable JSON.
 
-| Agency | Covers | Source |
-|---|---|---|
-| **FDA** | Food, drug, and device recalls | openFDA enforcement API |
-| **CPSC** | Consumer products | SaferProducts.gov REST service |
-| **USDA FSIS** | Meat, poultry, egg products | FSIS Recall API |
-| **NHTSA** | Vehicles, tires, child seats | ODI recalls flat file |
+| Agency | Covers | Source | Records |
+|---|---|---|---|
+| **FDA** | Food, drug, and device recalls | openFDA enforcement API | 86,683 |
+| **NHTSA** | Vehicles, tires, child seats | ODI recalls flat file | 15,138 |
+| **CPSC** | Consumer products | SaferProducts.gov REST service | 9,912 |
+| **USDA FSIS** | Meat, poultry, egg products | FSIS Recall API | ⚠️ *see below* |
+| | | **Total** | **111,733** |
+
+> **FSIS is not currently ingested.** `fsis.usda.gov` is behind Akamai bot
+> protection that rejects every non-browser TLS fingerprint — the JSON API,
+> the HTML pages, the RSS feed, and even the homepage return `403` from any
+> client, any location, any header set. The adapter is written and tested and
+> will work unchanged the moment the endpoint is reachable. Details and the
+> full evidence are in [`docs/sources.md`](docs/sources.md#3-usda-fsis).
+> **Coverage is 3 of 4 agencies** — say so on your RapidAPI listing.
 
 ---
 
@@ -73,7 +82,7 @@ curl https://<your-service>.onrender.com/health
 {
   "status": "ok",
   "database": "ok",
-  "recalls": 112431,
+  "recalls": 111733,
   "version": "0.1.0"
 }
 ```
@@ -232,19 +241,24 @@ pytest -q
 
 Never commit `.env` — it is gitignored.
 
-### ⚠️ FSIS is US-only
+### ⚠️ FSIS is currently unreachable
 
-`fsis.usda.gov` sits behind Akamai and returns **403 for its entire domain** to
-non-US IPs. If you develop from outside the US, the FSIS adapter will fail
-locally with an explanatory error; every other source works fine. Ingest FSIS
-by running the workflow from GitHub Actions (US runners) instead:
+`fsis.usda.gov` sits behind Akamai bot protection that rejects any client
+whose TLS handshake doesn't look like a real browser. Verified `403` from a US
+GitHub Actions runner across every combination of User-Agent, client hints,
+`Referer`, HTTP/1.1 and HTTP/2, and Python's TLS stack — and the homepage,
+`sitemap.xml`, RSS feed, `foodsafety.gov`, and `usda.gov/data.json` are all
+blocked identically. It is not geography and not headers.
 
-```bash
-gh workflow run fetch.yml -f agency=FSIS -f backfill=true
-```
+Running `python -m fetcher.run --agency FSIS` therefore fails with an
+explanatory error rather than a bare HTTP exception. Every other source works.
 
-Full details, and the rest of the per-source quirks, are in
-[`docs/sources.md`](docs/sources.md).
+Making it work would mean adding TLS impersonation (`curl_cffi`,
+`cloudscraper`) to defeat that control — a deliberate choice the project owner
+should make explicitly, not a default. It also breaks whenever Akamai rotates
+its fingerprint set.
+
+Full evidence is in [`docs/sources.md`](docs/sources.md#3-usda-fsis).
 
 ---
 
@@ -280,6 +294,14 @@ having to repeat the expression verbatim.
 ## Deployment
 
 **Database** — Neon free tier, US East (`us-east-2`).
+
+> ⚠️ **Storage headroom is limited.** The seeded database sits at **~438 MB of
+> the 512 MB free-tier limit (86%)**. The `raw` JSONB column is ~253 MB of
+> that — full source payloads for all 111,733 records. Growth from here is
+> slow (new recalls only, roughly 25 MB/year), but if you approach the cap,
+> the cheapest fix by far is trimming `raw` to the fields not already
+> promoted into normalized columns, which would free well over 100 MB.
+> `SELECT pg_size_pretty(pg_database_size(current_database()));` to check.
 
 **API** — Render free web service:
 
@@ -324,6 +346,9 @@ does not disable the schedule after 60 days of repo inactivity.
       and tags (`recalls`, `safety`, `FDA`, `CPSC`, `NHTSA`, `government`).
 - [ ] **Document the data lag** honestly — FDA refreshes weekly, NHTSA and
       CPSC daily. Buyers will notice, so say it up front.
+- [ ] **State the coverage as 3 agencies**, not 4, while FSIS is blocked.
+      Listing USDA meat/poultry as covered when it isn't will generate
+      refunds and bad reviews.
 - [ ] **Add a terms note**: this repackages US federal public-domain data;
       the source agencies do not endorse the service.
 
