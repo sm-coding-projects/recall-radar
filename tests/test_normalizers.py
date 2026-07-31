@@ -221,6 +221,29 @@ class TestNHTSA:
 # Upsert batching
 # --------------------------------------------------------------------------
 
+class TestDefaultAgencies:
+    def test_blocked_sources_are_out_of_the_nightly_rotation(self):
+        """A permanently-failing source must not fail the daily cron.
+
+        The heartbeat commit runs after the fetch step, so a non-zero exit
+        would stop it -- and the heartbeat is the only thing stopping GitHub
+        disabling the schedule for inactivity.
+        """
+        from fetcher.sources import ADAPTERS, DEFAULT_AGENCIES, UNAVAILABLE
+
+        assert "FSIS" in UNAVAILABLE
+        assert "FSIS" not in DEFAULT_AGENCIES
+        assert set(DEFAULT_AGENCIES) == {"FDA", "CPSC", "NHTSA"}
+        # Still reachable explicitly, and still unit-tested.
+        assert "FSIS" in ADAPTERS
+
+    def test_explicit_agency_overrides_the_default(self):
+        from fetcher.run import parse_args
+
+        assert parse_args(["--agency", "FSIS"]).agency == ["FSIS"]
+        assert parse_args([]).agency is None
+
+
 class TestDedupe:
     def test_collapses_duplicate_keys_keeping_the_last(self):
         """Postgres rejects a statement that hits one ON CONFLICT target twice.

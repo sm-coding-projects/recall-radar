@@ -18,7 +18,7 @@ from datetime import date, timedelta
 
 from . import db
 from .http import build_client
-from .sources import ADAPTERS
+from .sources import ADAPTERS, DEFAULT_AGENCIES, UNAVAILABLE
 
 log = logging.getLogger("fetcher")
 
@@ -37,7 +37,11 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     )
     parser.add_argument(
         "--agency", action="append", choices=sorted(ADAPTERS), metavar="AGENCY",
-        help=f"limit to one agency; repeatable. one of: {', '.join(sorted(ADAPTERS))}",
+        help=(
+            f"limit to one agency; repeatable. one of: {', '.join(sorted(ADAPTERS))}. "
+            f"default runs {', '.join(DEFAULT_AGENCIES)} "
+            f"(excluded by default: {', '.join(sorted(UNAVAILABLE))})"
+        ),
     )
     parser.add_argument(
         "--dry-run", action="store_true",
@@ -57,7 +61,9 @@ def main(argv: list[str] | None = None) -> int:
     logging.getLogger("httpx").setLevel(logging.WARNING)
 
     db.load_dotenv()
-    agencies = args.agency or sorted(ADAPTERS)
+    # An explicit --agency always wins, so a blocked source can still be
+    # retried on purpose without being in the nightly rotation.
+    agencies = args.agency or DEFAULT_AGENCIES
     until = date.today()
     since = None if args.backfill else until - timedelta(days=args.days)
 
