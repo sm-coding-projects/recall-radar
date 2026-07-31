@@ -1,0 +1,971 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "recall-radar",
+    "summary": "A unified US product-recalls API: FDA, CPSC, and NHTSA in one searchable JSON feed.",
+    "description": "\nOne API for every US product recall.\n\nThe US government publishes recalls across several unrelated agencies, in\ndifferent shapes, with different quirks. **recall-radar** fetches them daily,\nnormalizes them into a single schema, and serves them as clean, searchable JSON.\n\n### Coverage\n\n| Agency | Covers | Records |\n|---|---|---|\n| **FDA** | Food, drug, and device recalls | 86,683 |\n| **NHTSA** | Vehicles, tires, child seats | 15,138 |\n| **CPSC** | Consumer products | 9,912 |\n\nCurrently **3 agencies, 111,733 recalls**, going back to 1973 for CPSC.\nUSDA FSIS (meat and poultry) is not yet included — its upstream API is\nunreachable behind bot protection.\n\n### Response shape\n\nEvery successful list response is `{data, pagination, meta}`; single-item\nresponses are `{data, meta}`. Every error is `{\"error\": {code, message, detail}}`.\n\n### Refresh cadence\n\nFDA data refreshes roughly weekly upstream; NHTSA and CPSC daily. Ingestion\nruns every day at 06:00 UTC, so a day with no new FDA rows is normal.\n\n### Authentication\n\nRequests must carry the `X-RapidAPI-Proxy-Secret` header, which RapidAPI adds\nautomatically. `/health` is always open.\n",
+    "contact": {
+      "name": "recall-radar",
+      "url": "https://github.com/sm-coding-projects/recall-radar"
+    },
+    "license": {
+      "name": "Source data: US Government public domain"
+    },
+    "version": "0.1.0"
+  },
+  "servers": [
+    {
+      "url": "https://recall-radar.onrender.com",
+      "description": "Production"
+    }
+  ],
+  "paths": {
+    "/health": {
+      "get": {
+        "tags": [
+          "meta"
+        ],
+        "summary": "Service health",
+        "description": "Liveness check, including a real database round-trip.\n\n**This endpoint never requires authentication**, so it can be used as an\nuptime check without exposing your proxy secret.\n\nReturns `200` even when the database is unreachable — with\n`\"status\": \"degraded\"` and `\"database\": \"unavailable\"` — so that a briefly\nsuspended database does not flap an external health check. Use the\n`status` field, not the HTTP code, to distinguish the two.\n\nThe `recalls` field is the total row count, and is `null` when degraded.",
+        "operationId": "health_health_get",
+        "responses": {
+          "200": {
+            "description": "Service and database are both healthy.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Health"
+                },
+                "example": {
+                  "status": "ok",
+                  "database": "ok",
+                  "recalls": 111733,
+                  "version": "0.1.0"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/recalls": {
+      "get": {
+        "tags": [
+          "recalls"
+        ],
+        "summary": "List recalls with filters and pagination",
+        "description": "Browse recalls across all agencies, newest first.\n\nResults are ordered by `recall_date` descending. All filters are optional\nand combine with AND.\n\n- `agency` — exact match, case-insensitive (`FDA`, `CPSC`, `NHTSA`)\n- `category` — case-insensitive **substring** match, so `category=food`\n  matches `Food`, and `category=brake` matches NHTSA component names\n- `since` / `until` — inclusive bounds on `recall_date` (`YYYY-MM-DD`)\n\nPagination caps at **100 per page**; asking for more returns `422`.\n`pagination.total` is the count of all matches, not just this page, so you\ncan size a full pull before making it.\n\nPassing a `since` later than `until` returns `400` rather than an empty\npage, so a swapped-argument bug surfaces instead of looking like no data.",
+        "operationId": "list_recalls_recalls_get",
+        "parameters": [
+          {
+            "name": "agency",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Filter by agency, case-insensitive.",
+              "examples": [
+                "CPSC"
+              ],
+              "title": "Agency"
+            },
+            "description": "Filter by agency, case-insensitive."
+          },
+          {
+            "name": "category",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Case-insensitive substring match on category.",
+              "examples": [
+                "Food"
+              ],
+              "title": "Category"
+            },
+            "description": "Case-insensitive substring match on category."
+          },
+          {
+            "name": "since",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "format": "date"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Only recalls on or after this date.",
+              "examples": [
+                "2026-07-01"
+              ],
+              "title": "Since"
+            },
+            "description": "Only recalls on or after this date."
+          },
+          {
+            "name": "until",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "format": "date"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Only recalls on or before this date.",
+              "examples": [
+                "2026-07-31"
+              ],
+              "title": "Until"
+            },
+            "description": "Only recalls on or before this date."
+          },
+          {
+            "name": "page",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "description": "1-based page number.",
+              "default": 1,
+              "title": "Page"
+            },
+            "description": "1-based page number."
+          },
+          {
+            "name": "per_page",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 100,
+              "minimum": 1,
+              "description": "Results per page (max 100).",
+              "default": 25,
+              "title": "Per Page"
+            },
+            "description": "Results per page (max 100)."
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "A page of matching recalls.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ListResponse_Recall_"
+                },
+                "example": {
+                  "data": [
+                    {
+                      "id": 401,
+                      "agency": "CPSC",
+                      "source_id": "26636",
+                      "product": "Sviyatp Pool Drain Covers",
+                      "hazard": "The recalled drain covers violate the entrapment protection standards of the Virginia Graeme Baker Pool and Spa Safety Act (VGBA), posing deadly entrapment and drowning hazards to consumers.",
+                      "classification": "Refund",
+                      "recall_date": "2026-07-23",
+                      "published_at": "2026-07-24T00:00:00Z",
+                      "url": "https://www.cpsc.gov/Recalls/2026/Sviyatp-Pool-Drain-Covers-Recalled-Due-to-Risk-of-Serious-Injury-or-Death-from-Entrapment-and-Drowning-Hazards",
+                      "ingested_at": "2026-07-31T04:07:22.046254Z"
+                    },
+                    {
+                      "id": 513,
+                      "agency": "NHTSA",
+                      "source_id": "26V481000",
+                      "product": "AMG GLB35 4MATIC; C 300; C 300 4MATIC; CLE 300 4MATIC (+24 more) (2019-2026)",
+                      "brand": "MERCEDES-BENZ",
+                      "category": "LATCHES/LOCKS/LINKAGES:DOORS:LOCK",
+                      "hazard": "The micro-switch in the driver's door lock may corrode and fail to detect an open door, preventing the electronic parking brake from engaging automatically. This may result in a vehicle rollaway.",
+                      "classification": "Vehicle",
+                      "recall_date": "2026-07-24",
+                      "published_at": "2026-07-27T00:00:00Z",
+                      "url": "https://www.nhtsa.gov/recalls?nhtsaId=26V481000",
+                      "ingested_at": "2026-07-31T04:07:31.164779Z"
+                    }
+                  ],
+                  "pagination": {
+                    "page": 1,
+                    "per_page": 25,
+                    "total": 9912,
+                    "total_pages": 397,
+                    "has_next": true,
+                    "has_prev": false
+                  },
+                  "meta": {
+                    "filters": {
+                      "agency": "CPSC",
+                      "since": "2026-07-01"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The parameters parsed correctly but do not make sense together.",
+            "content": {
+              "application/json": {
+                "example": {
+                  "error": {
+                    "code": "bad_request",
+                    "message": "`since` must not be after `until`."
+                  }
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "A parameter failed validation, e.g. per_page above 100 or a malformed date.",
+            "content": {
+              "application/json": {
+                "example": {
+                  "error": {
+                    "code": "invalid_parameters",
+                    "message": "One or more query parameters are invalid.",
+                    "detail": [
+                      {
+                        "field": "per_page",
+                        "reason": "Input should be less than or equal to 100"
+                      }
+                    ]
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "The request did not come through RapidAPI.",
+            "content": {
+              "application/json": {
+                "example": {
+                  "error": {
+                    "code": "unauthorized",
+                    "message": "Missing or invalid X-RapidAPI-Proxy-Secret header."
+                  }
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Unexpected server error. Details are logged server-side, never returned.",
+            "content": {
+              "application/json": {
+                "example": {
+                  "error": {
+                    "code": "internal_error",
+                    "message": "An unexpected error occurred."
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/recalls/latest": {
+      "get": {
+        "tags": [
+          "recalls"
+        ],
+        "summary": "The 50 most recent recalls",
+        "description": "The 50 most recent recalls across all agencies, newest first.\n\nA fixed-size convenience feed for dashboards and alerting — no parameters,\nno pagination. `pagination` is `null` here by design.\n\nEquivalent to `/recalls?per_page=50`, but cheaper: it skips the `COUNT`\nquery that `/recalls` runs to populate pagination.\n\nFor anything filtered or deeper than 50 rows, use `/recalls`.",
+        "operationId": "latest_recalls_recalls_latest_get",
+        "responses": {
+          "200": {
+            "description": "The 50 newest recalls.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ListResponse_Recall_"
+                },
+                "example": {
+                  "data": [
+                    {
+                      "id": 513,
+                      "agency": "NHTSA",
+                      "source_id": "26V481000",
+                      "product": "AMG GLB35 4MATIC; C 300; C 300 4MATIC; CLE 300 4MATIC (+24 more) (2019-2026)",
+                      "brand": "MERCEDES-BENZ",
+                      "category": "LATCHES/LOCKS/LINKAGES:DOORS:LOCK",
+                      "hazard": "The micro-switch in the driver's door lock may corrode and fail to detect an open door, preventing the electronic parking brake from engaging automatically. This may result in a vehicle rollaway.",
+                      "classification": "Vehicle",
+                      "recall_date": "2026-07-24",
+                      "published_at": "2026-07-27T00:00:00Z",
+                      "url": "https://www.nhtsa.gov/recalls?nhtsaId=26V481000",
+                      "ingested_at": "2026-07-31T04:07:31.164779Z"
+                    },
+                    {
+                      "id": 401,
+                      "agency": "CPSC",
+                      "source_id": "26636",
+                      "product": "Sviyatp Pool Drain Covers",
+                      "hazard": "The recalled drain covers violate the entrapment protection standards of the Virginia Graeme Baker Pool and Spa Safety Act (VGBA), posing deadly entrapment and drowning hazards to consumers.",
+                      "classification": "Refund",
+                      "recall_date": "2026-07-23",
+                      "published_at": "2026-07-24T00:00:00Z",
+                      "url": "https://www.cpsc.gov/Recalls/2026/Sviyatp-Pool-Drain-Covers-Recalled-Due-to-Risk-of-Serious-Injury-or-Death-from-Entrapment-and-Drowning-Hazards",
+                      "ingested_at": "2026-07-31T04:07:22.046254Z"
+                    },
+                    {
+                      "id": 100,
+                      "agency": "FDA",
+                      "source_id": "D-0690-2026",
+                      "product": "BD ChloraPrep Clear, (2% w/v chlorhexidine gluconate (CHG) and 70% v/v isopropyl alcohol), 60 x 1 mL applicators/carton, STERILE SOLUTION, CareFusion 123, LLC, El Paso, TX. NDC 54365-400-31",
+                      "brand": "CareFusion 213, LLC",
+                      "category": "Drugs",
+                      "hazard": "Lack of Assurance of Sterility: Affected product may exhibit an open or incomplete seal on the packaging of the applicator",
+                      "classification": "Class II",
+                      "recall_date": "2026-07-09",
+                      "published_at": "2026-07-22T00:00:00Z",
+                      "url": "https://www.fda.gov/safety/recalls-market-withdrawals-safety-alerts",
+                      "ingested_at": "2026-07-31T04:07:23.113838Z"
+                    }
+                  ],
+                  "meta": {
+                    "limit": 50
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "The request did not come through RapidAPI.",
+            "content": {
+              "application/json": {
+                "example": {
+                  "error": {
+                    "code": "unauthorized",
+                    "message": "Missing or invalid X-RapidAPI-Proxy-Secret header."
+                  }
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Unexpected server error. Details are logged server-side, never returned.",
+            "content": {
+              "application/json": {
+                "example": {
+                  "error": {
+                    "code": "internal_error",
+                    "message": "An unexpected error occurred."
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/recalls/search": {
+      "get": {
+        "tags": [
+          "recalls"
+        ],
+        "summary": "Full-text search over recalls",
+        "description": "Postgres full-text search across product name, brand, and hazard text.\n\nResults are ranked by relevance, then by recall date.\n\nSupports web-search style operators:\n\n| Query | Meaning |\n|---|---|\n| `listeria cheese` | both words |\n| `\"air bag\"` | exact phrase |\n| `\"air bag\" -inflator` | phrase, excluding a term |\n| `salmonella or listeria` | either word |\n\nMatching is stemmed English, so `recalled` also matches `recall`.\nPunctuation and stray operators are handled gracefully rather than\nreturning an error.\n\nSearching is the right tool for \"is this product recalled?\"; use\n`/recalls` when you want to browse or export a date range.",
+        "operationId": "search_recalls_recalls_search_get",
+        "parameters": [
+          {
+            "name": "q",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 2,
+              "description": "Search query (min 2 characters).",
+              "examples": [
+                "listeria"
+              ],
+              "title": "Q"
+            },
+            "description": "Search query (min 2 characters)."
+          },
+          {
+            "name": "agency",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Optionally restrict to one agency.",
+              "title": "Agency"
+            },
+            "description": "Optionally restrict to one agency."
+          },
+          {
+            "name": "page",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "description": "1-based page number.",
+              "default": 1,
+              "title": "Page"
+            },
+            "description": "1-based page number."
+          },
+          {
+            "name": "per_page",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 100,
+              "minimum": 1,
+              "description": "Results per page (max 100).",
+              "default": 25,
+              "title": "Per Page"
+            },
+            "description": "Results per page (max 100)."
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Recalls matching the query, most relevant first.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ListResponse_Recall_"
+                },
+                "example": {
+                  "data": [
+                    {
+                      "id": 100,
+                      "agency": "FDA",
+                      "source_id": "D-0690-2026",
+                      "product": "BD ChloraPrep Clear, (2% w/v chlorhexidine gluconate (CHG) and 70% v/v isopropyl alcohol), 60 x 1 mL applicators/carton, STERILE SOLUTION, CareFusion 123, LLC, El Paso, TX. NDC 54365-400-31",
+                      "brand": "CareFusion 213, LLC",
+                      "category": "Drugs",
+                      "hazard": "Lack of Assurance of Sterility: Affected product may exhibit an open or incomplete seal on the packaging of the applicator",
+                      "classification": "Class II",
+                      "recall_date": "2026-07-09",
+                      "published_at": "2026-07-22T00:00:00Z",
+                      "url": "https://www.fda.gov/safety/recalls-market-withdrawals-safety-alerts",
+                      "ingested_at": "2026-07-31T04:07:23.113838Z"
+                    }
+                  ],
+                  "pagination": {
+                    "page": 1,
+                    "per_page": 25,
+                    "total": 7498,
+                    "total_pages": 300,
+                    "has_next": true,
+                    "has_prev": false
+                  },
+                  "meta": {
+                    "query": "listeria"
+                  }
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "A parameter failed validation, e.g. per_page above 100 or a malformed date.",
+            "content": {
+              "application/json": {
+                "example": {
+                  "error": {
+                    "code": "invalid_parameters",
+                    "message": "One or more query parameters are invalid.",
+                    "detail": [
+                      {
+                        "field": "per_page",
+                        "reason": "Input should be less than or equal to 100"
+                      }
+                    ]
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "The request did not come through RapidAPI.",
+            "content": {
+              "application/json": {
+                "example": {
+                  "error": {
+                    "code": "unauthorized",
+                    "message": "Missing or invalid X-RapidAPI-Proxy-Secret header."
+                  }
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Unexpected server error. Details are logged server-side, never returned.",
+            "content": {
+              "application/json": {
+                "example": {
+                  "error": {
+                    "code": "internal_error",
+                    "message": "An unexpected error occurred."
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/recalls/{agency}/{source_id}": {
+      "get": {
+        "tags": [
+          "recalls"
+        ],
+        "summary": "Get one recall by agency and source ID",
+        "description": "Look up a single recall by the identifier its own agency uses.\n\nThis is the stable, agency-native key — use it to re-fetch a recall you\nhave already seen, rather than the internal `id`, which is not guaranteed\nstable across reloads.\n\nIdentifier formats differ by agency:\n\n| Agency | Format | Example |\n|---|---|---|\n| FDA | `recall_number` | `D-0690-2026` |\n| CPSC | `RecallNumber` | `26636` |\n| NHTSA | NHTSA campaign number | `26V481000` |\n\nIdentifiers containing `/` are accepted as-is and do not need encoding.\n\nReturns `404` if no recall matches that agency and identifier.",
+        "operationId": "get_recall_recalls__agency___source_id__get",
+        "parameters": [
+          {
+            "name": "agency",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "description": "Agency code, case-insensitive.",
+              "examples": [
+                "NHTSA"
+              ],
+              "title": "Agency"
+            },
+            "description": "Agency code, case-insensitive."
+          },
+          {
+            "name": "source_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "description": "The agency's own recall identifier, exactly as it appears in `source_id`.",
+              "examples": [
+                "26V481000"
+              ],
+              "title": "Source Id"
+            },
+            "description": "The agency's own recall identifier, exactly as it appears in `source_id`."
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The requested recall.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ItemResponse_Recall_"
+                },
+                "example": {
+                  "data": {
+                    "id": 513,
+                    "agency": "NHTSA",
+                    "source_id": "26V481000",
+                    "product": "AMG GLB35 4MATIC; C 300; C 300 4MATIC; CLE 300 4MATIC (+24 more) (2019-2026)",
+                    "brand": "MERCEDES-BENZ",
+                    "category": "LATCHES/LOCKS/LINKAGES:DOORS:LOCK",
+                    "hazard": "The micro-switch in the driver's door lock may corrode and fail to detect an open door, preventing the electronic parking brake from engaging automatically. This may result in a vehicle rollaway.",
+                    "classification": "Vehicle",
+                    "recall_date": "2026-07-24",
+                    "published_at": "2026-07-27T00:00:00Z",
+                    "url": "https://www.nhtsa.gov/recalls?nhtsaId=26V481000",
+                    "ingested_at": "2026-07-31T04:07:31.164779Z"
+                  },
+                  "meta": {}
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No recall matches that agency and source_id.",
+            "content": {
+              "application/json": {
+                "example": {
+                  "error": {
+                    "code": "not_found",
+                    "message": "No FDA recall with source_id 'H-9999-2099'."
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "The request did not come through RapidAPI.",
+            "content": {
+              "application/json": {
+                "example": {
+                  "error": {
+                    "code": "unauthorized",
+                    "message": "Missing or invalid X-RapidAPI-Proxy-Secret header."
+                  }
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Unexpected server error. Details are logged server-side, never returned.",
+            "content": {
+              "application/json": {
+                "example": {
+                  "error": {
+                    "code": "internal_error",
+                    "message": "An unexpected error occurred."
+                  }
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "schemas": {
+      "HTTPValidationError": {
+        "properties": {
+          "detail": {
+            "items": {
+              "$ref": "#/components/schemas/ValidationError"
+            },
+            "type": "array",
+            "title": "Detail"
+          }
+        },
+        "type": "object",
+        "title": "HTTPValidationError"
+      },
+      "Health": {
+        "properties": {
+          "status": {
+            "type": "string",
+            "title": "Status"
+          },
+          "database": {
+            "type": "string",
+            "title": "Database"
+          },
+          "recalls": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Recalls"
+          },
+          "version": {
+            "type": "string",
+            "title": "Version"
+          }
+        },
+        "type": "object",
+        "required": [
+          "status",
+          "database",
+          "version"
+        ],
+        "title": "Health"
+      },
+      "ItemResponse_Recall_": {
+        "properties": {
+          "data": {
+            "$ref": "#/components/schemas/Recall"
+          },
+          "meta": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Meta"
+          }
+        },
+        "type": "object",
+        "required": [
+          "data"
+        ],
+        "title": "ItemResponse[Recall]"
+      },
+      "ListResponse_Recall_": {
+        "properties": {
+          "data": {
+            "items": {
+              "$ref": "#/components/schemas/Recall"
+            },
+            "type": "array",
+            "title": "Data"
+          },
+          "pagination": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Pagination"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "meta": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Meta"
+          }
+        },
+        "type": "object",
+        "required": [
+          "data"
+        ],
+        "title": "ListResponse[Recall]"
+      },
+      "Pagination": {
+        "properties": {
+          "page": {
+            "type": "integer",
+            "minimum": 1.0,
+            "title": "Page"
+          },
+          "per_page": {
+            "type": "integer",
+            "minimum": 1.0,
+            "title": "Per Page"
+          },
+          "total": {
+            "type": "integer",
+            "minimum": 0.0,
+            "title": "Total"
+          },
+          "total_pages": {
+            "type": "integer",
+            "minimum": 0.0,
+            "title": "Total Pages"
+          },
+          "has_next": {
+            "type": "boolean",
+            "title": "Has Next"
+          },
+          "has_prev": {
+            "type": "boolean",
+            "title": "Has Prev"
+          }
+        },
+        "type": "object",
+        "required": [
+          "page",
+          "per_page",
+          "total",
+          "total_pages",
+          "has_next",
+          "has_prev"
+        ],
+        "title": "Pagination"
+      },
+      "Recall": {
+        "properties": {
+          "id": {
+            "type": "integer",
+            "title": "Id"
+          },
+          "agency": {
+            "type": "string",
+            "title": "Agency"
+          },
+          "source_id": {
+            "type": "string",
+            "title": "Source Id"
+          },
+          "product": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Product"
+          },
+          "brand": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Brand"
+          },
+          "category": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Category"
+          },
+          "hazard": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Hazard"
+          },
+          "classification": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Classification"
+          },
+          "recall_date": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Recall Date"
+          },
+          "published_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Published At"
+          },
+          "url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Url"
+          },
+          "ingested_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Ingested At"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "agency",
+          "source_id"
+        ],
+        "title": "Recall"
+      },
+      "ValidationError": {
+        "properties": {
+          "loc": {
+            "items": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "integer"
+                }
+              ]
+            },
+            "type": "array",
+            "title": "Location"
+          },
+          "msg": {
+            "type": "string",
+            "title": "Message"
+          },
+          "type": {
+            "type": "string",
+            "title": "Error Type"
+          }
+        },
+        "type": "object",
+        "required": [
+          "loc",
+          "msg",
+          "type"
+        ],
+        "title": "ValidationError"
+      }
+    }
+  },
+  "tags": [
+    {
+      "name": "recalls",
+      "description": "Query, search, and look up recall records."
+    },
+    {
+      "name": "meta",
+      "description": "Service health. No authentication required."
+    }
+  ]
+}
