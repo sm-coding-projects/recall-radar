@@ -417,11 +417,14 @@ normalization into one schema.
 
 | Agency | Covers | Source | Records | History |
 |---|---|---|---|---|
-| **FDA** | Food, drug, and medical-device enforcement reports | openFDA enforcement API | 86,683 | 2007 onward |
+| **FDA** | Food, drug, and medical-device enforcement reports | openFDA enforcement API | 86,683 | 2005 onward, dense from 2012 |
 | **NHTSA** | Vehicles, tires, equipment, child seats | NHTSA ODI recalls file | 15,138 | 2010 onward |
 | **CPSC** | Consumer products | SaferProducts.gov | 9,912 | **1973 onward** |
 
-**Total: 111,733 recalls.**
+**Total: 111,733 recalls**, spanning 1973-06-08 to the present.
+
+FDA's earliest records are sparse — a few dozen per year before 2008 — with
+substantial coverage from 2012 onward. CPSC is continuous from 1973.
 
 ### How often data updates
 
