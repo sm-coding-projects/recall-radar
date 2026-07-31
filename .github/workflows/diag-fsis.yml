@@ -1,0 +1,37 @@
+name: Diagnose FSIS access
+
+# Temporary: can the human-facing FSIS recalls pages be scraped, given the
+# JSON API is blocked?
+on:
+  workflow_dispatch:
+
+jobs:
+  diag:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Probe FSIS HTML pages
+        run: |
+          CHROME='Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36'
+          probe() {
+            printf '%-58s -> ' "$1"
+            curl -sSL -m 25 -o /tmp/body -w "HTTP %{http_code} type=%{content_type} size=%{size_download}\n" \
+              -A "$CHROME" \
+              -H 'Accept: text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8' \
+              -H 'Accept-Language: en-US,en;q=0.9' \
+              -H 'Upgrade-Insecure-Requests: 1' \
+              -H 'Sec-Fetch-Dest: document' -H 'Sec-Fetch-Mode: navigate' -H 'Sec-Fetch-Site: none' \
+              "$2" || echo "(curl failed)"
+          }
+          probe "recalls listing page"        "https://www.fsis.usda.gov/recalls"
+          probe "recalls-alerts landing"      "https://www.fsis.usda.gov/recalls-alerts"
+          probe "recall search w/ params"     "https://www.fsis.usda.gov/recalls?field_recall_date_value=&field_states_id=All"
+          probe "a specific recall page"      "https://www.fsis.usda.gov/recalls-alerts/pilgrims-pride-corporation-recalls-raw-chicken"
+          probe "sitemap.xml"                 "https://www.fsis.usda.gov/sitemap.xml"
+
+      - name: Probe non-USDA aggregators of USDA recalls
+        run: |
+          probe() { printf '%-58s -> ' "$1"; curl -sSL -m 25 -o /tmp/b -w "HTTP %{http_code} type=%{content_type} size=%{size_download}\n" -A 'recall-radar/0.1' "$2" || echo "(failed)"; }
+          probe "FoodSafety.gov recalls JSON feed"  "https://www.foodsafety.gov/recalls-alerts/feed.json"
+          probe "FoodSafety.gov recalls page"       "https://www.foodsafety.gov/recalls-and-outbreaks"
+          probe "data.gov (new CKAN path)"          "https://catalog.data.gov/api/action/package_search?q=FSIS+recall&rows=3"
+          probe "USDA open data catalog"            "https://www.usda.gov/data.json"
