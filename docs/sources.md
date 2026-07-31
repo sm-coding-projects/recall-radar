@@ -171,44 +171,53 @@ CPSC is the only source that ships a real per-recall `URL` — use it directly.
 
 **Base URL:** `https://www.fsis.usda.gov/fsis/api/recall/v/1`
 
-### ⚠️ Blocked from this machine — geographic, not technical
+### ⚠️ Blocked by Akamai bot protection — unresolved
 
-Every request to `fsis.usda.gov` from this dev machine returns an Akamai
-**HTTP 403 "Access Denied"**. This is **not** a bad URL and **not** a
-User-Agent problem. Verified scope of the block:
+Every request to `fsis.usda.gov` returns an Akamai **HTTP 403 "Access Denied"**,
+from every client and location tried. The domain is blocked wholesale — the
+homepage 403s just like the API.
 
 | Target | Result |
 |---|---|
 | `/fsis/api/recall/v/1` | 403 |
-| `/fsis/api/establishments/v/1` | 403 |
-| `/fsis/api/mpi/v/1` | 403 |
+| `/fsis/api/establishments/v/1`, `/fsis/api/mpi/v/1` | 403 |
 | `/science-data/developer-resources/recall-api` (docs page) | 403 |
 | `Recall-API-documentation.pdf` | 403 |
 | `https://www.fsis.usda.gov/` (homepage) | 403 |
+| `fsis-content/rss/recalls.xml` (RSS feed) | 403 |
+| `foodsafety.gov/rss/recalls.xml` | 403 |
 
-Tried and all still 403: default UA, Chrome UA, no UA at all, HTTP/1.1 and
-HTTP/2, full Chrome client hints (`sec-ch-ua`, `Sec-Fetch-*`), `Referer`,
-and Python `urllib` (different TLS stack).
+**An earlier revision of this document blamed geo-filtering. That was wrong.**
+The initial evidence was consistent with it — the whole domain 403s and this
+dev machine's egress IP is in Australia — but a controlled test from a US
+GitHub Actions runner disproved it. From the US runner, all of these still
+returned 403:
 
-**Cause:** the whole domain is blocked, homepage included, and this machine's
-egress IP geolocates to **Australia (AS Superloop)**. USDA fronts the site with
-Akamai and filters non-US traffic. The other three sources all responded fine
-from the same IP, which isolates it to USDA.
+default curl UA · `recall-radar` UA · Chrome UA · Chrome UA + `Accept`
+headers · Chrome UA + full client hints (`sec-ch-ua`, `Sec-Fetch-*`,
+`Referer`) · HTTP/1.1 · HTTP/2 · Python `urllib`
 
-**Consequence for the build:** FSIS ingestion works from a US IP —
-GitHub Actions runners and Render's US regions both qualify. So the daily cron
-(Step 7) and the deployed service (Step 8) are unaffected. Only **local**
-FSIS fetching fails, which affects the Step 9 local backfill.
+Since neither the source IP's country nor any combination of request headers
+changes the outcome, the block is on the **TLS handshake fingerprint** — curl
+and Python present a different JA3 signature than a real browser, and Akamai
+rejects on that before the HTTP request is considered. This matches the
+observation that the public projects consuming this API all reach for
+`cloudscraper` or `curl_cffi`, whose entire purpose is TLS impersonation.
 
-**Plan:** run the FSIS backfill via a manual `workflow_dispatch` on the GitHub
-Actions workflow (US runner) instead of locally. The adapter is written and
-unit-tested against fixtures locally, then validated against live data on its
-first US-side run.
+**Status: FSIS is not ingested.** The adapter is written and unit-tested
+against fixtures, and will work unchanged the moment the endpoint is
+reachable, but no live data has been loaded.
 
-**Explicitly rejected:** several public projects that consume this API work
-around the block with `cloudscraper` or `curl_cffi` TLS impersonation. I have
-not done that — deliberately defeating a bot-protection control is the wrong
-tool here, especially when a legitimate US-egress path already exists.
+**Not done unilaterally:** adding `curl_cffi`/`cloudscraper` TLS impersonation
+would very likely work, but it means deliberately defeating a deployed bot
+control. That is a call for the project owner, not a default — see the note in
+the README. It also adds a fragile dependency that breaks whenever Akamai
+updates its fingerprint set.
+
+**No mirror found.** `catalog.data.gov`'s CKAN API now returns 404 for
+`package_search`/`package_list`, and there is no non-Akamai FSIS host. USDA
+meat/poultry recalls are *not* covered by openFDA's food endpoint, so this is
+a genuine coverage gap rather than a duplicate.
 
 ### Schema (from three independent sources, pending live validation)
 
@@ -371,4 +380,4 @@ parsed to `date` / `timestamptz` in the adapter, never in SQL.
 | FDA | ✅ | ✅ |
 | CPSC | ✅ | ✅ |
 | NHTSA (flat file) | ✅ headers + dictionary | ⏳ on first parse |
-| FSIS | ❌ geo-blocked locally | ⏳ from US runner |
+| FSIS | ❌ blocked everywhere tried | ❌ not ingested |
