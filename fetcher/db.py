@@ -3,21 +3,23 @@ from __future__ import annotations
 import json
 import os
 from dataclasses import dataclass
-from typing import Iterable, Sequence
+from typing import Any, Iterable, Sequence
 
 import psycopg
 from psycopg.types.json import Jsonb
 
 from .models import NormalizedRecall
 
-CHUNK_SIZE = 500
+# Rows per statement. Each row carries a jsonb `raw` blob of a few KB, so this
+# keeps a single round trip to roughly a megabyte.
+CHUNK_SIZE = 200
 
 UPSERT_SQL = """
 INSERT INTO recalls (
     agency, source_id, product, brand, category, hazard,
     classification, recall_date, published_at, url, raw
 )
-VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+VALUES {values}
 ON CONFLICT (agency, source_id) DO UPDATE SET
     product        = EXCLUDED.product,
     brand          = EXCLUDED.brand,
@@ -78,6 +80,12 @@ def dedupe(records: Sequence[NormalizedRecall]) -> list[NormalizedRecall]:
 def upsert(conn: psycopg.Connection, records: Iterable[NormalizedRecall]) -> UpsertCounts:
     """Idempotent bulk upsert. Returns insert/update counts.
 
+    Each chunk goes out as ONE multi-row INSERT rather than
+    executemany(returning=True). psycopg pipelines executemany, and Neon's
+    pooled endpoint drops the connection partway through a large pipeline
+    ("SSL error: bad length"). A single statement per chunk avoids pipelining
+    altogether and is faster besides.
+
     `xmax = 0` distinguishes a fresh insert from an update of an existing row.
     """
     batch = dedupe(list(records))
@@ -86,28 +94,24 @@ def upsert(conn: psycopg.Connection, records: Iterable[NormalizedRecall]) -> Ups
     with conn.cursor() as cur:
         for start in range(0, len(batch), CHUNK_SIZE):
             chunk = batch[start : start + CHUNK_SIZE]
-            params = [
-                (
+            values = ", ".join(["(" + ", ".join(["%s"] * 11) + ")"] * len(chunk))
+            params: list[Any] = []
+            for r in chunk:
+                params.extend((
                     r.agency, r.source_id, r.product, r.brand, r.category, r.hazard,
                     r.classification, r.recall_date, r.published_at, r.url,
                     Jsonb(r.raw) if r.raw else None,
-                )
-                for r in chunk
-            ]
-            cur.executemany(UPSERT_SQL, params, returning=True)
+                ))
 
-            # executemany(returning=True) exposes one result set per row.
-            while True:
-                row = cur.fetchone()
-                if row is not None:
-                    if row[0]:
-                        counts.inserted += 1
-                    else:
-                        counts.updated += 1
-                if not cur.nextset():
-                    break
+            cur.execute(UPSERT_SQL.format(values=values), params)
+            for (inserted,) in cur.fetchall():
+                if inserted:
+                    counts.inserted += 1
+                else:
+                    counts.updated += 1
 
-    conn.commit()
+            conn.commit()
+
     return counts
 
 
