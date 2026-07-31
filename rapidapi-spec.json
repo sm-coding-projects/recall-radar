@@ -27,7 +27,7 @@
         ],
         "summary": "Service health",
         "description": "Liveness check, including a real database round-trip.\n\n**This endpoint never requires authentication**, so it can be used as an\nuptime check without exposing your proxy secret.\n\nReturns `200` even when the database is unreachable — with\n`\"status\": \"degraded\"` and `\"database\": \"unavailable\"` — so that a briefly\nsuspended database does not flap an external health check. Use the\n`status` field, not the HTTP code, to distinguish the two.\n\nThe `recalls` field is the total row count, and is `null` when degraded.",
-        "operationId": "health_health_get",
+        "operationId": "getHealth",
         "responses": {
           "200": {
             "description": "Service and database are both healthy.",
@@ -54,8 +54,8 @@
           "recalls"
         ],
         "summary": "List recalls with filters and pagination",
-        "description": "Browse recalls across all agencies, newest first.\n\nResults are ordered by `recall_date` descending. All filters are optional\nand combine with AND.\n\n- `agency` — exact match, case-insensitive (`FDA`, `CPSC`, `NHTSA`)\n- `category` — case-insensitive **substring** match, so `category=food`\n  matches `Food`, and `category=brake` matches NHTSA component names\n- `since` / `until` — inclusive bounds on `recall_date` (`YYYY-MM-DD`)\n\nPagination caps at **100 per page**; asking for more returns `422`.\n`pagination.total` is the count of all matches, not just this page, so you\ncan size a full pull before making it.\n\nPassing a `since` later than `until` returns `400` rather than an empty\npage, so a swapped-argument bug surfaces instead of looking like no data.",
-        "operationId": "list_recalls_recalls_get",
+        "description": "Browse recalls across all agencies, newest first.\n\nResults are ordered by `recall_date` descending. All filters are optional\nand combine with AND.\n\n- `agency` — exact match, case-insensitive (`FDA`, `CPSC`, `NHTSA`)\n- `category` — case-insensitive **substring** match, so `category=food`\n  matches `Food`, and `category=brake` matches NHTSA component names\n- `since` / `until` — inclusive bounds on `recall_date` (`YYYY-MM-DD`)\n\nPagination caps at **100 per page**; asking for more returns `422`.\n`pagination.total` is the count of all matches, not just this page, so you\ncan size a full pull before making it.\n\nPassing a `since` later than `until` returns `400` rather than an empty\npage, so a swapped-argument bug surfaces instead of looking like no data.\n\nEvery parameter may be sent blank (`?agency=&since=`) — a blank value means\n\"not supplied\", which is what API gateways emit for unset optional fields.",
+        "operationId": "listRecalls",
         "parameters": [
           {
             "name": "agency",
@@ -70,13 +70,13 @@
                   "type": "null"
                 }
               ],
-              "description": "Filter by agency, case-insensitive.",
+              "description": "Filter by agency, case-insensitive. Blank means no filter.",
               "examples": [
                 "CPSC"
               ],
               "title": "Agency"
             },
-            "description": "Filter by agency, case-insensitive."
+            "description": "Filter by agency, case-insensitive. Blank means no filter."
           },
           {
             "name": "category",
@@ -91,13 +91,13 @@
                   "type": "null"
                 }
               ],
-              "description": "Case-insensitive substring match on category.",
+              "description": "Case-insensitive substring match on category. Blank means no filter.",
               "examples": [
                 "Food"
               ],
               "title": "Category"
             },
-            "description": "Case-insensitive substring match on category."
+            "description": "Case-insensitive substring match on category. Blank means no filter."
           },
           {
             "name": "since",
@@ -113,13 +113,13 @@
                   "type": "null"
                 }
               ],
-              "description": "Only recalls on or after this date.",
+              "description": "Only recalls on or after this date. Blank means no lower bound.",
               "examples": [
                 "2026-07-01"
               ],
               "title": "Since"
             },
-            "description": "Only recalls on or after this date."
+            "description": "Only recalls on or after this date. Blank means no lower bound."
           },
           {
             "name": "until",
@@ -135,40 +135,58 @@
                   "type": "null"
                 }
               ],
-              "description": "Only recalls on or before this date.",
+              "description": "Only recalls on or before this date. Blank means no upper bound.",
               "examples": [
                 "2026-07-31"
               ],
               "title": "Until"
             },
-            "description": "Only recalls on or before this date."
+            "description": "Only recalls on or before this date. Blank means no upper bound."
           },
           {
             "name": "page",
             "in": "query",
             "required": false,
             "schema": {
-              "type": "integer",
-              "minimum": 1,
-              "description": "1-based page number.",
-              "default": 1,
+              "anyOf": [
+                {
+                  "type": "integer",
+                  "minimum": 1
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "1-based page number. Blank defaults to 1.",
+              "examples": [
+                1
+              ],
               "title": "Page"
             },
-            "description": "1-based page number."
+            "description": "1-based page number. Blank defaults to 1."
           },
           {
             "name": "per_page",
             "in": "query",
             "required": false,
             "schema": {
-              "type": "integer",
-              "maximum": 100,
-              "minimum": 1,
-              "description": "Results per page (max 100).",
-              "default": 25,
+              "anyOf": [
+                {
+                  "type": "integer",
+                  "maximum": 100,
+                  "minimum": 1
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Results per page, max 100. Blank defaults to 25.",
+              "examples": [
+                25
+              ],
               "title": "Per Page"
             },
-            "description": "Results per page (max 100)."
+            "description": "Results per page, max 100. Blank defaults to 25."
           }
         ],
         "responses": {
@@ -294,7 +312,7 @@
         ],
         "summary": "The 50 most recent recalls",
         "description": "The 50 most recent recalls across all agencies, newest first.\n\nA fixed-size convenience feed for dashboards and alerting — no parameters,\nno pagination. `pagination` is `null` here by design.\n\nEquivalent to `/recalls?per_page=50`, but cheaper: it skips the `COUNT`\nquery that `/recalls` runs to populate pagination.\n\nFor anything filtered or deeper than 50 rows, use `/recalls`.",
-        "operationId": "latest_recalls_recalls_latest_get",
+        "operationId": "getLatestRecalls",
         "responses": {
           "200": {
             "description": "The 50 newest recalls.",
@@ -388,8 +406,8 @@
           "recalls"
         ],
         "summary": "Full-text search over recalls",
-        "description": "Postgres full-text search across product name, brand, and hazard text.\n\nResults are ranked by relevance, then by recall date.\n\nSupports web-search style operators:\n\n| Query | Meaning |\n|---|---|\n| `listeria cheese` | both words |\n| `\"air bag\"` | exact phrase |\n| `\"air bag\" -inflator` | phrase, excluding a term |\n| `salmonella or listeria` | either word |\n\nMatching is stemmed English, so `recalled` also matches `recall`.\nPunctuation and stray operators are handled gracefully rather than\nreturning an error.\n\nSearching is the right tool for \"is this product recalled?\"; use\n`/recalls` when you want to browse or export a date range.",
-        "operationId": "search_recalls_recalls_search_get",
+        "description": "Postgres full-text search across product name, brand, and hazard text.\n\nResults are ranked by relevance, then by recall date.\n\nSupports web-search style operators:\n\n| Query | Meaning |\n|---|---|\n| `listeria cheese` | both words |\n| `\"air bag\"` | exact phrase |\n| `\"air bag\" -inflator` | phrase, excluding a term |\n| `salmonella or listeria` | either word |\n\nMatching is stemmed English, so `recalled` also matches `recall`.\nPunctuation and stray operators are handled gracefully rather than\nreturning an error.\n\nSearching is the right tool for \"is this product recalled?\"; use\n`/recalls` when you want to browse or export a date range.\n\n`agency`, `page`, and `per_page` may be sent blank, which means \"not\nsupplied\". `q` is required: an empty query returns `422`.",
+        "operationId": "searchRecalls",
         "parameters": [
           {
             "name": "q",
@@ -398,13 +416,13 @@
             "schema": {
               "type": "string",
               "minLength": 2,
-              "description": "Search query (min 2 characters).",
+              "description": "Search query. Required, minimum 2 characters.",
               "examples": [
                 "listeria"
               ],
               "title": "Q"
             },
-            "description": "Search query (min 2 characters)."
+            "description": "Search query. Required, minimum 2 characters."
           },
           {
             "name": "agency",
@@ -419,37 +437,58 @@
                   "type": "null"
                 }
               ],
-              "description": "Optionally restrict to one agency.",
+              "description": "Optionally restrict to one agency. Blank means all agencies.",
+              "examples": [
+                "FDA"
+              ],
               "title": "Agency"
             },
-            "description": "Optionally restrict to one agency."
+            "description": "Optionally restrict to one agency. Blank means all agencies."
           },
           {
             "name": "page",
             "in": "query",
             "required": false,
             "schema": {
-              "type": "integer",
-              "minimum": 1,
-              "description": "1-based page number.",
-              "default": 1,
+              "anyOf": [
+                {
+                  "type": "integer",
+                  "minimum": 1
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "1-based page number. Blank defaults to 1.",
+              "examples": [
+                1
+              ],
               "title": "Page"
             },
-            "description": "1-based page number."
+            "description": "1-based page number. Blank defaults to 1."
           },
           {
             "name": "per_page",
             "in": "query",
             "required": false,
             "schema": {
-              "type": "integer",
-              "maximum": 100,
-              "minimum": 1,
-              "description": "Results per page (max 100).",
-              "default": 25,
+              "anyOf": [
+                {
+                  "type": "integer",
+                  "maximum": 100,
+                  "minimum": 1
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Results per page, max 100. Blank defaults to 25.",
+              "examples": [
+                25
+              ],
               "title": "Per Page"
             },
-            "description": "Results per page (max 100)."
+            "description": "Results per page, max 100. Blank defaults to 25."
           }
         ],
         "responses": {
@@ -547,7 +586,7 @@
         ],
         "summary": "Get one recall by agency and source ID",
         "description": "Look up a single recall by the identifier its own agency uses.\n\nThis is the stable, agency-native key — use it to re-fetch a recall you\nhave already seen, rather than the internal `id`, which is not guaranteed\nstable across reloads.\n\nIdentifier formats differ by agency:\n\n| Agency | Format | Example |\n|---|---|---|\n| FDA | `recall_number` | `D-0690-2026` |\n| CPSC | `RecallNumber` | `26636` |\n| NHTSA | NHTSA campaign number | `26V481000` |\n\nIdentifiers containing `/` are accepted as-is and do not need encoding.\n\nReturns `404` if no recall matches that agency and identifier.",
-        "operationId": "get_recall_recalls__agency___source_id__get",
+        "operationId": "getRecallById",
         "parameters": [
           {
             "name": "agency",
