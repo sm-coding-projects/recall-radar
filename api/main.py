@@ -9,6 +9,7 @@ from typing import Annotated, Any
 
 from fastapi import FastAPI, HTTPException, Path, Query, Request
 from fastapi.exceptions import RequestValidationError
+from fastapi.openapi.utils import get_openapi
 from fastapi.responses import JSONResponse
 
 from . import db, openapi_examples as ex
@@ -489,3 +490,55 @@ def _paginate(page: int, per_page: int, total: int) -> Pagination:
         has_next=page < total_pages,
         has_prev=page > 1,
     )
+
+
+# --------------------------------------------------------------------------
+# OpenAPI post-processing
+# --------------------------------------------------------------------------
+
+def _promote_parameter_examples(schema: dict[str, Any]) -> None:
+    """Copy each parameter's schema-level example up to the parameter itself.
+
+    FastAPI emits JSON-Schema style examples nested inside the parameter's
+    schema (`schema.examples: ["listeria"]`). API consoles -- RapidAPI's test
+    playground among them -- prefill their forms from the OpenAPI-style
+    parameter-level `example` instead, and ignore the nested one.
+
+    With nothing to prefill, the console submits blanks. That made two working
+    endpoints look broken on the listing: `/recalls/search` returned 422
+    (`q` is required and cannot be empty) and `/recalls/{agency}/{source_id}`
+    returned 404 (the path collapsed to `/recalls//`).
+
+    Hoisting the value fixes the console without weakening any validation --
+    a caller who deliberately sends `q=` still gets a 422, which is correct.
+    """
+    for path_item in schema.get("paths", {}).values():
+        for operation in path_item.values():
+            if not isinstance(operation, dict):
+                continue
+            for parameter in operation.get("parameters", []):
+                examples = parameter.get("schema", {}).get("examples")
+                if examples and "example" not in parameter:
+                    parameter["example"] = examples[0]
+
+
+def custom_openapi() -> dict[str, Any]:
+    if app.openapi_schema:
+        return app.openapi_schema
+    schema = get_openapi(
+        title=app.title,
+        version=app.version,
+        summary=app.summary,
+        description=app.description,
+        routes=app.routes,
+        tags=app.openapi_tags,
+        servers=app.servers,
+        contact=app.contact,
+        license_info=app.license_info,
+    )
+    _promote_parameter_examples(schema)
+    app.openapi_schema = schema
+    return schema
+
+
+app.openapi = custom_openapi

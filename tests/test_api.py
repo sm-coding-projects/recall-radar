@@ -448,6 +448,44 @@ class TestOpenAPI:
                         checked += 1
         assert checked >= 9, f"expected to check ~10 optional query params, saw {checked}"
 
+    def test_every_parameter_has_a_top_level_example(self, spec):
+        """API consoles prefill from parameter-level `example`, not schema.examples.
+
+        FastAPI nests examples inside the parameter schema, which RapidAPI's
+        playground ignores -- so it submitted blanks and made working
+        endpoints return 422 and 404 on the listing.
+        """
+        for path, operations in spec["paths"].items():
+            for op in operations.values():
+                for param in op.get("parameters", []):
+                    assert "example" in param, (
+                        f"{path}:{param['name']} has no parameter-level example, "
+                        "so a console will submit it blank"
+                    )
+
+    def test_requests_built_from_the_spec_examples_succeed(self, client, spec):
+        """The playground scenario, end to end.
+
+        Fills every parameter with the example the spec advertises and calls
+        the endpoint. This is what a buyer's first click does, so it must not
+        return 4xx.
+        """
+        for path, operations in spec["paths"].items():
+            for op in operations.values():
+                url = path
+                query = {}
+                for param in op.get("parameters", []):
+                    value = param["example"]
+                    if param["in"] == "path":
+                        url = url.replace("{" + param["name"] + "}", str(value))
+                    else:
+                        query[param["name"]] = value
+                response = client.get(url, params=query)
+                assert response.status_code == 200, (
+                    f"{op['operationId']} -> {response.status_code} "
+                    f"for {url} {query}"
+                )
+
     def test_pagination_bounds_survive_in_the_schema(self, spec):
         """The ge/le bounds moved inside the union; they must still be published."""
         params = {
