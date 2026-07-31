@@ -14,14 +14,16 @@ See docs/sources.md#1-openfda--fda. Two upstream quirks drive this design:
 from __future__ import annotations
 
 import logging
-from datetime import date
+from datetime import date, timedelta
 from typing import Any, Iterator
 
 import httpx
 
 from ..http import get
 from ..models import NormalizedRecall
-from ..util import clean, parse_compact_date, as_utc_datetime, stable_hash
+from ..util import (
+    as_utc_datetime, clean, parse_compact_date, plausible_date, stable_hash,
+)
 
 log = logging.getLogger(__name__)
 
@@ -35,6 +37,19 @@ EARLIEST_YEAR = 2004   # openFDA enforcement data starts around here
 
 # FDA publishes no per-recall permalink, so point at the official recalls index.
 RECALLS_INDEX = "https://www.fda.gov/safety/recalls-market-withdrawals-safety-alerts"
+
+# A recall cannot plausibly be initiated decades before FDA reports it, so a
+# huge gap means the initiation date is mistyped. Measured against the live
+# archive, genuine gaps tail off smoothly to ~10 years (4 records) with a
+# single outlier at 15.4 years -- then nothing until 82.9 and 1800.1 years,
+# both of which are transposed digits:
+#
+#   Z-0139-2014  "19301211"  an Intuitive Surgical device reported in 2013
+#   F-0880-2013  "02121207"  a transposition of "20121207"
+#
+# 20 years sits in that empty band: comfortably past every legitimate record,
+# comfortably short of both corruptions.
+MAX_INITIATION_LEAD = timedelta(days=round(365.25 * 20))
 
 
 def fetch(
@@ -108,8 +123,23 @@ def _normalize(record: dict[str, Any], endpoint: str) -> NormalizedRecall | None
     if source_id is None:
         return None
 
-    recall_date = parse_compact_date(record.get("recall_initiation_date"))
-    report_date = parse_compact_date(record.get("report_date"))
+    # openFDA ships occasional transposed dates that parse cleanly but are
+    # centuries off. Reject those and fall back to report_date, rather than
+    # storing a value that sorts ahead of every real recall.
+    recall_date = _guarded_date(record, "recall_initiation_date")
+    report_date = _guarded_date(record, "report_date")
+
+    # Absolute bounds alone cannot catch every mistyped date: "19301211" is a
+    # perfectly ordinary-looking 1930, and the floor has to stay below 1973 to
+    # preserve CPSC's genuine archive. Comparing the two fields catches it.
+    if recall_date and report_date and (report_date - recall_date) > MAX_INITIATION_LEAD:
+        log.warning(
+            "FDA %s: recall_initiation_date %s precedes report_date %s by over "
+            "%d years; ignoring it and using report_date",
+            clean(record.get("recall_number")) or record.get("event_id"),
+            recall_date, report_date, MAX_INITIATION_LEAD.days // 365,
+        )
+        recall_date = None
 
     return NormalizedRecall(
         agency=AGENCY,
@@ -124,6 +154,20 @@ def _normalize(record: dict[str, Any], endpoint: str) -> NormalizedRecall | None
         url=RECALLS_INDEX,
         raw=record,
     )
+
+
+def _guarded_date(record: dict[str, Any], field: str) -> date | None:
+    """Parse a date field, discarding implausible values with a warning."""
+    raw = record.get(field)
+    parsed = parse_compact_date(raw)
+    checked = plausible_date(parsed)
+    if parsed is not None and checked is None:
+        log.warning(
+            "FDA %s: implausible %s %r parsed as %s; ignoring",
+            clean(record.get("recall_number")) or record.get("event_id"),
+            field, raw, parsed,
+        )
+    return checked
 
 
 def _source_id(record: dict[str, Any], endpoint: str) -> str | None:

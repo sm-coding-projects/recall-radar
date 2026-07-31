@@ -112,7 +112,27 @@ Envelope is `{meta: {...}, results: [...]}`. Result fields:
    real id and the `EVT-` row remains as a stale duplicate. Accepted tradeoff —
    dropping unnumbered records would hide the *newest* recalls, which are
    exactly the ones users care about most.
-3. There is no per-recall public URL in the payload. We synthesize a search
+3. **Some dates are transposed but parse cleanly.** Two records in the live
+   archive carry a mistyped `recall_initiation_date`:
+
+   | Record | Raw value | Parses to | Reported |
+   |---|---|---|---|
+   | `F-0880-2013` | `02121207` | 0212-12-07 | 2013-01-23 |
+   | `Z-0139-2014` | `19301211` | 1930-12-11 | 2013-11-13 |
+
+   Both sorted ahead of every genuine recall. The adapter now applies two
+   guards and falls back to `report_date`:
+
+   - an absolute floor of 1900 plus a no-future-dates rule; and
+   - a cross-field check, because `19301211` clears any floor low enough to
+     keep CPSC's genuine 1973 archive. Measured across the live data,
+     legitimate initiation-to-report gaps tail off smoothly to ~10 years
+     (4 records) with one outlier at 15.4 years, then nothing until 82.9 and
+     1800.1 years -- the two corruptions. The threshold sits at 20 years,
+     inside that empty band.
+
+   `raw` keeps the original upstream value untouched.
+4. There is no per-recall public URL in the payload. We synthesize a search
    link (see [§6](#6-cross-cutting-decisions)).
 
 ---

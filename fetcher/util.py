@@ -2,11 +2,19 @@ from __future__ import annotations
 
 import hashlib
 import re
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from html.parser import HTMLParser
 from typing import Iterable
 
 _WS = re.compile(r"\s+")
+
+# The oldest recall in any of our sources is CPSC's, from June 1973. A floor of
+# 1900 is therefore generous while still catching mangled values.
+EARLIEST_PLAUSIBLE_RECALL = date(1900, 1, 1)
+
+# A recall cannot be initiated in the future. The small margin absorbs the
+# timezone gap between an agency's clock and ours.
+FUTURE_TOLERANCE = timedelta(days=2)
 
 
 def clean(value: object) -> str | None:
@@ -46,6 +54,27 @@ def parse_compact_date(value: object) -> date | None:
     except ValueError:
         # Real upstream values include impossible dates like 20200000.
         return None
+
+
+def plausible_date(value: date | None, *, today: date | None = None) -> date | None:
+    """Return the date, or None if it cannot be a real recall date.
+
+    Upstream data carries occasional transposed digits that parse cleanly into
+    absurd dates. The known case is openFDA's F-0880-2013, whose
+    recall_initiation_date is "02121207" -- a transposition of "20121207" --
+    which parses to 7 December 0212 and then sorts ahead of every genuine
+    record.
+
+    Callers treat a rejected value as missing and fall back to another date
+    field, rather than storing something that is visibly wrong to a customer.
+    """
+    if value is None:
+        return None
+    if value < EARLIEST_PLAUSIBLE_RECALL:
+        return None
+    if value > (today or date.today()) + FUTURE_TOLERANCE:
+        return None
+    return value
 
 
 def parse_iso_date(value: object) -> date | None:

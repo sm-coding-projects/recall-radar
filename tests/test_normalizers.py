@@ -15,7 +15,8 @@ from fetcher.db import dedupe
 from fetcher.models import NormalizedRecall
 from fetcher.sources import cpsc, fda, fsis, nhtsa
 from fetcher.util import (
-    join_distinct, parse_compact_date, parse_iso_date, stable_hash, strip_html,
+    join_distinct, parse_compact_date, parse_iso_date, plausible_date,
+    stable_hash, strip_html,
 )
 
 
@@ -48,6 +49,24 @@ class TestUtil:
     def test_stable_hash_is_deterministic(self):
         assert stable_hash("a", "b") == stable_hash("a", "b")
         assert stable_hash("a", "b") != stable_hash("b", "a")
+
+    def test_plausible_date_passes_real_dates(self):
+        for value in (date(1973, 6, 8), date(2013, 1, 23), date(2026, 7, 28)):
+            assert plausible_date(value, today=date(2026, 7, 31)) == value
+
+    @pytest.mark.parametrize(
+        "value",
+        [date(212, 12, 7), date(1899, 12, 31), date(1066, 10, 14), date(2999, 12, 31)],
+    )
+    def test_plausible_date_rejects_impossible_dates(self, value):
+        assert plausible_date(value, today=date(2026, 7, 31)) is None
+
+    def test_plausible_date_tolerates_slight_clock_skew(self):
+        # A source a timezone ahead of us must not have today's rows dropped.
+        assert plausible_date(date(2026, 8, 1), today=date(2026, 7, 31)) is not None
+
+    def test_plausible_date_passes_none_through(self):
+        assert plausible_date(None) is None
 
 
 class TestNormalizedRecall:
@@ -95,6 +114,89 @@ class TestFDA:
             {"recall_number": "H-1-2026", "report_date": "20260722", "recall_initiation_date": ""}, "food"
         )
         assert out.recall_date == date(2026, 7, 22)
+
+    def test_transposed_date_falls_back_to_report_date(self):
+        """The real F-0880-2013 case.
+
+        openFDA gives recall_initiation_date "02121207" -- a transposition of
+        "20121207" -- which parses cleanly to 7 December 0212 and then sorts
+        ahead of every genuine recall in the archive.
+        """
+        out = fda._normalize(
+            {
+                "recall_number": "F-0880-2013",
+                "recall_initiation_date": "02121207",
+                "report_date": "20130123",
+                "product_description": "test",
+            },
+            "food",
+        )
+        assert out.recall_date == date(2013, 1, 23)
+        assert out.recall_date.year > 1900
+
+    def test_future_dates_are_rejected(self):
+        out = fda._normalize(
+            {"recall_number": "F-1-2026", "recall_initiation_date": "29991231",
+             "report_date": "20260722"},
+            "food",
+        )
+        assert out.recall_date == date(2026, 7, 22)
+
+    def test_a_record_with_only_bad_dates_keeps_none_rather_than_nonsense(self):
+        out = fda._normalize(
+            {"recall_number": "F-2-2026", "recall_initiation_date": "02121207",
+             "report_date": "01010101"},
+            "food",
+        )
+        assert out.recall_date is None
+        assert out.published_at is None
+
+    def test_initiation_date_decades_before_report_is_rejected(self):
+        """The real Z-0139-2014 case.
+
+        An Intuitive Surgical da Vinci recall reported in 2013 carries
+        recall_initiation_date "19301211". 1930 passes any absolute floor low
+        enough to keep CPSC's genuine 1973 archive, so only comparing the two
+        fields catches it.
+        """
+        out = fda._normalize(
+            {
+                "recall_number": "Z-0139-2014",
+                "recall_initiation_date": "19301211",
+                "report_date": "20131113",
+                "product_description": "da Vinci Patient Cart",
+            },
+            "device",
+        )
+        assert out.recall_date == date(2013, 11, 13)
+
+    def test_a_long_but_believable_lead_time_is_kept(self):
+        """Genuine records run up to ~15 years; only the empty band beyond is cut."""
+        out = fda._normalize(
+            {"recall_number": "Z-1-2014", "recall_initiation_date": "20050101",
+             "report_date": "20140101"},
+            "device",
+        )
+        assert out.recall_date == date(2005, 1, 1)
+
+    def test_initiation_after_report_is_left_alone(self):
+        # Amended records legitimately carry an initiation date after the
+        # report date; the guard is one-directional on purpose.
+        out = fda._normalize(
+            {"recall_number": "Z-2-2014", "recall_initiation_date": "20140601",
+             "report_date": "20140101"},
+            "device",
+        )
+        assert out.recall_date == date(2014, 6, 1)
+
+    def test_valid_dates_are_untouched(self):
+        out = fda._normalize(
+            {"recall_number": "F-3-2026", "recall_initiation_date": "20260504",
+             "report_date": "20260722"},
+            "food",
+        )
+        assert out.recall_date == date(2026, 5, 4)
+        assert out.published_at.date() == date(2026, 7, 22)
 
     def test_date_query_builds_the_documented_range_syntax(self):
         assert fda._date_query(date(2026, 6, 1), date(2026, 7, 31)) == "report_date:[20260601 TO 20260731]"
